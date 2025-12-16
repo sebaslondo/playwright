@@ -1,0 +1,150 @@
+name: Deploy Single GCP Function
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy GCP functions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.HCL_GCP_CREDENTIALS }}'
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.HCL_GCP_PROJECT_ID }}
+
+      - name: Deploy classification-process-function
+        run: |
+          cd poc_gcp_functions/classification_process_function
+          cp -r ../common .
+          gcloud functions deploy dev-classification-process-function \
+            --gen2 \
+            --runtime=python311 \
+            --trigger-topic=dev-email-notification-queue \
+            --entry-point=classification_process_pubsub \
+            --region=us-central1 \
+            --source=. \
+            --memory=1GiB \
+            --timeout=300s \
+            --project=${{ secrets.HCL_GCP_PROJECT_ID }} \
+            --service-account=hcl-email-automation@${{ secrets.HCL_GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+            --set-env-vars GCP_PROJECT_ID=${{ secrets.HCL_GCP_PROJECT_ID }},PUBSUB_LOGGING_TOPIC=dev-workflow-log-topic,ENVIRONMENT=DEV
+          cd ../..
+
+      # - name: Deploy classification-process-function
+      #   run: |
+      #     cd poc_gcp_functions/email_permission_request_function
+      #     cp -r ../common .
+      #     gcloud functions deploy dev-email-permission-request-function \
+      #       --gen2 \
+      #       --runtime=python311 \
+      #       --trigger-http \
+      #       --entry-point=http_handler \
+      #       --region=us-central1 \
+      #       --source=. \
+      #       --memory=1GiB \
+      #       --timeout=300s \
+      #       --project=${{ secrets.HCL_GCP_PROJECT_ID }} \
+      #       --service-account=hcl-email-automation@${{ secrets.HCL_GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+      #       --set-env-vars GCP_PROJECT_ID=${{ secrets.HCL_GCP_PROJECT_ID }},PUBSUB_LOGGING_TOPIC=${{ vars.PUBSUB_LOGGING_TOPIC }},ENVIRONMENT=DEV
+      #     cd ../..
+
+      # - name: Deploy store-execution-log-function
+      #   run: |
+      #     cd poc_gcp_functions/store_execution_log_function
+      #     cp -r ../common .
+      #     gcloud functions deploy store-execution-log-function \
+      #       --gen2 \
+      #       --runtime=python311 \
+      #       --trigger-topic=${{ vars.PUBSUB_LOGGING_TOPIC }} \
+      #       --entry-point=pubsub_event \
+      #       --region=us-central1 \
+      #       --source=. \
+      #       --memory=1GiB \
+      #       --timeout=300s \
+      #       --service-account=hcl-email-automation@${{ secrets.HCL_GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+      #       --set-env-vars GCP_PROJECT_ID=${{ secrets.HCL_GCP_PROJECT_ID }}
+
+      # - name: Deploy reply-message-function
+      #   run: |
+      #     cd poc_gcp_functions/reply-message-function
+      #     cp -r ../common .
+      #     gcloud functions deploy reply-message-function \
+      #       --gen2 \
+      #       --runtime=python311 \
+      #       --trigger-http \
+      #       --allow-unauthenticated \
+      #       --entry-point=http_handler \
+      #       --region=us-central1 \
+      #       --source=. \
+      #       --memory=1GiB \
+      #       --timeout=500s \
+      #       --service-account=hcl-email-automation@${{ secrets.HCL_GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+      #       --set-env-vars GCP_PROJECT_ID=${{ secrets.HCL_GCP_PROJECT_ID }}
+      #     cd ../..
+      
+      # - name: Deploy reply-message-function
+      #   run: |
+      #     cd poc_gcp_functions/reply-message-function
+      #     cp -r ../common .
+      #     gcloud functions deploy reply-message-function \
+      #       --gen2 \
+      #       --runtime=python311 \
+      #       --trigger-http \
+      #       --allow-unauthenticated \
+      #       --entry-point=http_handler \
+      #       --region=us-central1 \
+      #       --source=. \
+      #       --memory=1GiB \
+      #       --timeout=500s \
+      #       --service-account=hcl-email-automation@${{ secrets.HCL_GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+      #       --set-env-vars GCP_PROJECT_ID=${{ secrets.HCL_GCP_PROJECT_ID }},PUBSUB_LOGGING_TOPIC=${{ vars.PUBSUB_LOGGING_TOPIC }}
+      #     cd ../..
+
+#       - name: Deploy validate-reply-message-function
+#         run: |
+#           cd poc_gcp_functions/validate-reply-message-function
+#           cp -r ../common .
+#           gcloud functions deploy validate-reply-message-function \
+#             --gen2 \
+#             --runtime=python311 \
+#             --trigger-http \
+#             --allow-unauthenticated \
+#             --entry-point=http_handler \
+#             --region=us-central1 \
+#             --source=. \
+#             --memory=1GiB \
+#             --timeout=500s \
+#             --service-account=hcl-email-automation@${{ secrets.HCL_GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+#             --set-env-vars GCP_PROJECT_ID=${{ secrets.HCL_GCP_PROJECT_ID }}
+#           cd ../..
+          
+      # - name: Deploy main-queue-function
+      #   run: |
+      #     cd poc_gcp_functions/main-queue-function
+      #     gcloud functions deploy main-queue-function \
+      #       --runtime python310 \
+      #       --trigger-http \
+      #       --allow-unauthenticated \
+      #       --entry-point main \
+      #       --region us-central1
+      #     cd ../..
+
+      # - name: Deploy function_three
+      #   run: |
+      #     cd poc_gcp_functions/function_three
+      #     gcloud functions deploy function_three \
+      #       --runtime python310 \
+      #       --trigger-http \
+      #       --allow-unauthenticated \
+      #       --entry-point main \
+      #       --region us-central1
+      #     cd ../..

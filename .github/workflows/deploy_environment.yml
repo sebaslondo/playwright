@@ -1,0 +1,651 @@
+name: Deploy Full Environment to Google Cloud
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+
+env:
+  ENVIRONMENT: ${{ inputs.environment }}
+  GCP_PROJECT_ID: hcl-email-automation-project
+
+jobs:
+  deploy-database:
+    name: Build database and tables required
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      DB_HOST: ${{ vars.MYSQL_HOST }}       # Ej: 34.123.45.67 o IP pública de tu instancia
+      DB_USER: ${{ vars.MYSQL_USER }}       # Ej: root o un usuario personalizado
+      DB_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+      DB_NAME: ${{ vars.MYSQL_DB }}       # Ej: n8ndb
+      ENVIRONMENT: ${{ inputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install MySQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client
+
+      - name: Deploy schema to Cloud SQL
+        env:
+          DB_HOST: ${{ vars.MYSQL_HOST }}       # Ej: 34.123.45.67 o IP pública de tu instancia
+          DB_USER: ${{ vars.MYSQL_USER }}       # Ej: root o un usuario personalizado
+          DB_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          DB_NAME: ${{ vars.MYSQL_DB }}       # Ej: n8ndb
+        run: |
+          mysql -h "$DB_HOST" \
+                -u "$DB_USER" \
+                -p"$DB_PASSWORD" \
+                "$DB_NAME" \
+                < database/creation.sql
+
+      - name: Setup logging workflow
+        run: |
+          SCRIPT="database/${ENVIRONMENT}_log_setup.sql"
+          if [ ! -f "$SCRIPT" ]; then
+            echo "Setup script not found: $SCRIPT"
+            exit 1
+          fi
+
+          echo "Running setup script: $SCRIPT"
+          mysql -h "$DB_HOST" \
+                -u "$DB_USER" \
+                -p"$DB_PASSWORD" \
+                "$DB_NAME" \
+                < $SCRIPT
+      
+
+  publish-secrets:
+    name: Publish Secrets to Secret Manager
+    runs-on: ubuntu-latest
+    needs: deploy-database
+    environment: ${{ inputs.environment }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: '${{ secrets.HCL_GCP_CREDENTIALS }}'
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ env.GCP_PROJECT_ID }}
+
+    - name: Set Env Sufix in Upper Case
+      id: upper
+      run: echo "ENV=${ENVIRONMENT^^}" >> $GITHUB_ENV
+      shell: bash
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+
+    # Secret: AZURE_CLIENT_ID
+    - name: Create/Update Azure Client ID Secret
+      run: |
+        SECRET_NAME="AZURE_CLIENT_ID_${ENV}"
+        
+        echo "${{ secrets.AZURE_CLIENT_ID }}" | gcloud secrets create $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }} || \
+        echo "${{ secrets.AZURE_CLIENT_ID }}" | gcloud secrets versions add $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }}
+        
+        gcloud secrets versions list $SECRET_NAME \
+          --project=${{ env.GCP_PROJECT_ID }} \
+          --filter="state=enabled" \
+          --format="value(name)" \
+          --sort-by="~createTime" | tail -n +2 | \
+        xargs -I {} gcloud secrets versions disable {} --project=${{ env.GCP_PROJECT_ID }} || true
+
+    # Secret: AZURE_CLIENT_SECRET
+    - name: Create/Update Azure Client Secret
+      run: |
+        SECRET_NAME="AZURE_CLIENT_SECRET_${ENV}"
+        
+        # Crear secret o agregar nueva versión
+        echo "${{ secrets.AZURE_CLIENT_SECRET }}" | gcloud secrets create $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }} || \
+        echo "${{ secrets.AZURE_CLIENT_SECRET }}" | gcloud secrets versions add $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }}
+        
+        # Deshabilitar versiones anteriores (mantener solo la más reciente)
+        gcloud secrets versions list $SECRET_NAME \
+          --project=${{ env.GCP_PROJECT_ID }} \
+          --filter="state=enabled" \
+          --format="value(name)" \
+          --sort-by="~createTime" | tail -n +2 | \
+        xargs -I {} gcloud secrets versions disable {} --project=${{ env.GCP_PROJECT_ID }} || true
+
+    # Secret: AZURE_TENANT_ID
+    - name: Create/Update Azure Tenant ID Secret
+      run: |
+        SECRET_NAME="AZURE_TENANT_ID_${ENV}"
+        
+        # Crear secret o agregar nueva versión
+        echo "${{ secrets.AZURE_TENANT_ID }}" | gcloud secrets create $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }} || \
+        echo "${{ secrets.AZURE_TENANT_ID }}" | gcloud secrets versions add $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }}
+        
+        # Deshabilitar versiones anteriores (mantener solo la más reciente)
+        gcloud secrets versions list $SECRET_NAME \
+          --project=${{ env.GCP_PROJECT_ID }} \
+          --filter="state=enabled" \
+          --format="value(name)" \
+          --sort-by="~createTime" | tail -n +2 | \
+        xargs -I {} gcloud secrets versions disable {} --project=${{ env.GCP_PROJECT_ID }} || true
+
+    # Variable: MYSQL_DB
+    - name: Create/Update MySQL DB Secret
+      run: |
+        SECRET_NAME="MYSQL_DB_${ENV}"
+        
+        # Crear secret o agregar nueva versión
+        echo "${{ vars.MYSQL_DB }}" | gcloud secrets create $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }} || \
+        echo "${{ vars.MYSQL_DB }}" | gcloud secrets versions add $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }}
+        
+        # Deshabilitar versiones anteriores (mantener solo la más reciente)
+        gcloud secrets versions list $SECRET_NAME \
+          --project=${{ env.GCP_PROJECT_ID }} \
+          --filter="state=enabled" \
+          --format="value(name)" \
+          --sort-by="~createTime" | tail -n +2 | \
+        xargs -I {} gcloud secrets versions disable {} --project=${{ env.GCP_PROJECT_ID }} || true
+
+    # Variable: MYSQL_HOST
+    - name: Create/Update MySQL Host Secret
+      run: |
+        SECRET_NAME="MYSQL_HOST_${ENV}"
+        
+        # Crear secret o agregar nueva versión
+        echo "${{ vars.MYSQL_HOST }}" | gcloud secrets create $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }} || \
+        echo "${{ vars.MYSQL_HOST }}" | gcloud secrets versions add $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }}
+        
+        # Deshabilitar versiones anteriores (mantener solo la más reciente)
+        gcloud secrets versions list $SECRET_NAME \
+          --project=${{ env.GCP_PROJECT_ID }} \
+          --filter="state=enabled" \
+          --format="value(name)" \
+          --sort-by="~createTime" | tail -n +2 | \
+        xargs -I {} gcloud secrets versions disable {} --project=${{ env.GCP_PROJECT_ID }} || true
+
+    # Variable: MYSQL_USER
+    - name: Create/Update MySQL User Secret
+      run: |
+        SECRET_NAME="MYSQL_USER_${ENV}"
+        
+        # Crear secret o agregar nueva versión
+        echo "${{ vars.MYSQL_USER }}" | gcloud secrets create $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }} || \
+        echo "${{ vars.MYSQL_USER }}" | gcloud secrets versions add $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }}
+        
+        # Deshabilitar versiones anteriores (mantener solo la más reciente)
+        gcloud secrets versions list $SECRET_NAME \
+          --project=${{ env.GCP_PROJECT_ID }} \
+          --filter="state=enabled" \
+          --format="value(name)" \
+          --sort-by="~createTime" | tail -n +2 | \
+        xargs -I {} gcloud secrets versions disable {} --project=${{ env.GCP_PROJECT_ID }} || true
+
+    # Secret: MYSQL_PASSWORD
+    - name: Create/Update MySQL Password Secret
+      run: |
+        SECRET_NAME="MYSQL_PASSWORD_${ENV}"
+        
+        # Crear secret o agregar nueva versión
+        echo "${{ secrets.MYSQL_PASSWORD }}" | gcloud secrets create $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }} || \
+        echo "${{ secrets.MYSQL_PASSWORD }}" | gcloud secrets versions add $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }}
+        
+        # Deshabilitar versiones anteriores (mantener solo la más reciente)
+        gcloud secrets versions list $SECRET_NAME \
+          --project=${{ env.GCP_PROJECT_ID }} \
+          --filter="state=enabled" \
+          --format="value(name)" \
+          --sort-by="~createTime" | tail -n +2 | \
+        xargs -I {} gcloud secrets versions disable {} --project=${{ env.GCP_PROJECT_ID }} || true
+
+    # Variable: NETSUITE_ACCOUNT_ID
+    - name: Create/Update NetSuite Account ID Secret
+      run: |
+        SECRET_NAME="NETSUITE_ACCOUNT_ID_${ENV}"
+        
+        # Crear secret o agregar nueva versión
+        echo "${{ vars.NETSUITE_ACCOUNT_ID }}" | gcloud secrets create $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }} || \
+        echo "${{ vars.NETSUITE_ACCOUNT_ID }}" | gcloud secrets versions add $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }}
+        
+        # Deshabilitar versiones anteriores (mantener solo la más reciente)
+        gcloud secrets versions list $SECRET_NAME \
+          --project=${{ env.GCP_PROJECT_ID }} \
+          --filter="state=enabled" \
+          --format="value(name)" \
+          --sort-by="~createTime" | tail -n +2 | \
+        xargs -I {} gcloud secrets versions disable {} --project=${{ env.GCP_PROJECT_ID }} || true
+
+    # Secret: NETSUITE_CLIENT_KEY
+    - name: Create/Update NetSuite Client Key Secret
+      run: |
+        SECRET_NAME="NETSUITE_CLIENT_KEY_${ENV}"
+        
+        # Crear secret o agregar nueva versión
+        echo "${{ secrets.NETSUITE_CLIENT_KEY }}" | gcloud secrets create $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }} || \
+        echo "${{ secrets.NETSUITE_CLIENT_KEY }}" | gcloud secrets versions add $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }}
+        
+        # Deshabilitar versiones anteriores (mantener solo la más reciente)
+        gcloud secrets versions list $SECRET_NAME \
+          --project=${{ env.GCP_PROJECT_ID }} \
+          --filter="state=enabled" \
+          --format="value(name)" \
+          --sort-by="~createTime" | tail -n +2 | \
+        xargs -I {} gcloud secrets versions disable {} --project=${{ env.GCP_PROJECT_ID }} || true
+
+    # Secret: NETSUITE_CLIENT_SECRET
+    - name: Create/Update NetSuite Client Secret
+      run: |
+        SECRET_NAME="NETSUITE_CLIENT_SECRET_${ENV}"
+        
+        # Crear secret o agregar nueva versión
+        echo "${{ secrets.NETSUITE_CLIENT_SECRET }}" | gcloud secrets create $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }} || \
+        echo "${{ secrets.NETSUITE_CLIENT_SECRET }}" | gcloud secrets versions add $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }}
+        
+        # Deshabilitar versiones anteriores (mantener solo la más reciente)
+        gcloud secrets versions list $SECRET_NAME \
+          --project=${{ env.GCP_PROJECT_ID }} \
+          --filter="state=enabled" \
+          --format="value(name)" \
+          --sort-by="~createTime" | tail -n +2 | \
+        xargs -I {} gcloud secrets versions disable {} --project=${{ env.GCP_PROJECT_ID }} || true
+
+    # Secret: NETSUITE_TOKEN_KEY
+    - name: Create/Update NetSuite Token Key Secret
+      run: |
+        SECRET_NAME="NETSUITE_TOKEN_KEY_${ENV}"
+        
+        # Crear secret o agregar nueva versión
+        echo "${{ secrets.NETSUITE_TOKEN_KEY }}" | gcloud secrets create $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }} || \
+        echo "${{ secrets.NETSUITE_TOKEN_KEY }}" | gcloud secrets versions add $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }}
+        
+        # Deshabilitar versiones anteriores (mantener solo la más reciente)
+        gcloud secrets versions list $SECRET_NAME \
+          --project=${{ env.GCP_PROJECT_ID }} \
+          --filter="state=enabled" \
+          --format="value(name)" \
+          --sort-by="~createTime" | tail -n +2 | \
+        xargs -I {} gcloud secrets versions disable {} --project=${{ env.GCP_PROJECT_ID }} || true
+
+    # Secret: NETSUITE_TOKEN_SECRET
+    - name: Create/Update NetSuite Token Secret
+      run: |
+        SECRET_NAME="NETSUITE_TOKEN_SECRET_${ENV}"
+        
+        # Crear secret o agregar nueva versión
+        echo "${{ secrets.NETSUITE_TOKEN_SECRET }}" | gcloud secrets create $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }} || \
+        echo "${{ secrets.NETSUITE_TOKEN_SECRET }}" | gcloud secrets versions add $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }}
+        
+        # Deshabilitar versiones anteriores (mantener solo la más reciente)
+        gcloud secrets versions list $SECRET_NAME \
+          --project=${{ env.GCP_PROJECT_ID }} \
+          --filter="state=enabled" \
+          --format="value(name)" \
+          --sort-by="~createTime" | tail -n +2 | \
+        xargs -I {} gcloud secrets versions disable {} --project=${{ env.GCP_PROJECT_ID }} || true
+
+    # Secret: OPENAI_API_KEY
+    - name: Create/Update OpenAI API Key Secret
+      run: |
+        SECRET_NAME="OPENAI_API_KEY_${ENV}"
+        
+        echo "${{ secrets.OPENAI_API_KEY }}" | gcloud secrets create $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }} || \
+        echo "${{ secrets.OPENAI_API_KEY }}" | gcloud secrets versions add $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }}
+        
+        gcloud secrets versions list $SECRET_NAME \
+          --project=${{ env.GCP_PROJECT_ID }} \
+          --filter="state=enabled" \
+          --format="value(name)" \
+          --sort-by="~createTime" | tail -n +2 | \
+        xargs -I {} gcloud secrets versions disable {} --project=${{ env.GCP_PROJECT_ID }} || true
+
+    # Variable: N8N_ENDPOINT_URL
+    - name: Create/Update N8N Endpoint URL Secret
+      run: |
+        SECRET_NAME="N8N_ENDPOINT_URL_${ENV}"
+
+        echo "${{ vars.N8N_ENDPOINT_URL }}" | gcloud secrets create $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }} || \
+        echo "${{ vars.N8N_ENDPOINT_URL }}" | gcloud secrets versions add $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }}
+
+        gcloud secrets versions list $SECRET_NAME \
+          --project=${{ env.GCP_PROJECT_ID }} \
+          --filter="state=enabled" \
+          --format="value(name)" \
+          --sort-by="~createTime" | tail -n +2 | \
+        xargs -I {} gcloud secrets versions disable {} --project=${{ env.GCP_PROJECT_ID }} || true
+
+    # Dynamic Variable: EMAIL_QUEUE_TOPIC
+    - name: Create/Update Email queue Pub/Sub Topic Secret
+      run: |
+        SECRET_NAME="EMAIL_QUEUE_TOPIC_${ENV}"
+        TOPIC="${{ env.ENVIRONMENT }}-email-notification-queue"
+
+        echo "$TOPIC" | gcloud secrets create $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }} || \
+        echo "$TOPIC" | gcloud secrets versions add $SECRET_NAME \
+          --data-file=- \
+          --project=${{ env.GCP_PROJECT_ID }}
+
+        gcloud secrets versions list $SECRET_NAME \
+          --project=${{ env.GCP_PROJECT_ID }} \
+          --filter="state=enabled" \
+          --format="value(name)" \
+          --sort-by="~createTime" | tail -n +2 | \
+        xargs -I {} gcloud secrets versions disable {} --project=${{ env.GCP_PROJECT_ID }} || true
+
+
+  ensure-pubsub: 
+    name: Ensure Pub/Sub topics and subscriptions
+    runs-on: ubuntu-latest
+    env:
+      REGION: us-central1
+      ENVIRONMENT: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.HCL_GCP_CREDENTIALS }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Ensure Pub/Sub topics and subscriptions exist
+        run: |
+          set -e
+
+          TOPICS=("email-notification-queue" "subscription-renewal-topic" "workflow-log-topic")
+
+          for topic in "${TOPICS[@]}"; do
+            FULL_TOPIC="${ENVIRONMENT}-${topic}"
+            SUBSCRIPTION="${FULL_TOPIC}-sub"
+
+            echo "🔎 Checking topic: $FULL_TOPIC"
+            gcloud pubsub topics describe "$FULL_TOPIC" --project="$GCP_PROJECT_ID" >/dev/null 2>&1 || \
+              gcloud pubsub topics create "$FULL_TOPIC" --project="$GCP_PROJECT_ID"
+
+            echo "🔎 Checking subscription: $SUBSCRIPTION"
+            gcloud pubsub subscriptions describe "$SUBSCRIPTION" --project="$GCP_PROJECT_ID" >/dev/null 2>&1 || \
+              gcloud pubsub subscriptions create "$SUBSCRIPTION" \
+                --topic="$FULL_TOPIC" \
+                --ack-deadline=30 \
+                --project="$GCP_PROJECT_ID"
+          done
+      
+      # Cloud Scheduler runs auto messages to subscription topic each 2 days
+      - name: Ensure Cloud Scheduler job exists
+        run: |
+          set -e
+
+          JOB_NAME="subscription-renewal-job-$ENVIRONMENT"
+          TOPIC_NAME="${ENVIRONMENT}-subscription-renewal-topic"
+          
+          echo "🔍 Checking if job '$JOB_NAME' exists..."
+          if gcloud scheduler jobs describe "$JOB_NAME" \
+            --location="us-central1" \
+            --project="$GCP_PROJECT_ID" >/dev/null 2>&1; then
+
+            echo "✅ Job exists. Updating..."
+            gcloud scheduler jobs update pubsub "$JOB_NAME" \
+              --location="us-central1" \
+              --project="$GCP_PROJECT_ID" \
+              --schedule="0 3 */2 * *" \
+              --topic="$TOPIC_NAME" \
+              --message-body="{}" \
+              --time-zone="UTC"
+          else
+            echo "⚙️ Job does not exist. Creating..."
+            gcloud scheduler jobs create pubsub "$JOB_NAME" \
+              --location="us-central1" \
+              --project="$GCP_PROJECT_ID" \
+              --schedule="0 3 */2 * *" \
+              --topic="$TOPIC_NAME" \
+              --message-body="{}" \
+              --time-zone="UTC"
+          fi
+
+  deploy-functions:
+    name: Deploy Cloud Functions (Gen2)
+    runs-on: ubuntu-latest
+    needs: 
+      - publish-secrets
+      - ensure-pubsub
+    environment: ${{ inputs.environment }}
+
+    env:
+      REGION: us-central1
+      ENVIRONMENT: ${{ inputs.environment }}
+      LOGGING_TOPIC: ${{ inputs.environment }}-workflow-log-topic
+    strategy:
+      matrix:
+        include:
+          # 0. Email login wrapper
+          - name: email-permission-request-function
+            path: poc_gcp_functions/email_permission_request_function
+            entry_point: http_handler
+            trigger: --trigger-http
+
+          # 1. Email authentication and subscription creation
+          - name: email-permission-function
+            path: poc_gcp_functions/email_permission_function
+            entry_point: http_handler
+            trigger: --trigger-http
+
+          # 2. Subscription maintenance for a constant connection with the inbox
+          - name: subscription-keeper-function
+            path: poc_gcp_functions/subscription_keeper_function
+            entry_point: subscription_manager
+            trigger: --trigger-topic=${ENVIRONMENT}-subscription-renewal-topic
+
+          # 3. Notification endpoint for Azure subscriptions
+          - name: main-queue-function
+            path: poc_gcp_functions/main_queue_function
+            entry_point: main_queue_function
+            trigger: --trigger-http
+
+          # 4. Message processing and classification from queue
+          - name: classification-process-function
+            path: poc_gcp_functions/classification_process_function
+            entry_point: classification_process_pubsub
+            trigger: --trigger-topic=${ENVIRONMENT}-email-notification-queue
+
+          # 5. Netsuite Middleware functions as an API wrapper for data extraction
+          - name: netsuite-middleware-function
+            path: poc_gcp_functions/netsuite_middleware_function
+            entry_point: netsuite_handler
+            trigger: --trigger-http
+          
+          # 6. Reply messages from user account
+          - name: reply-message-function
+            path: poc_gcp_functions/reply-message-function
+            entry_point: http_handler
+            trigger: --trigger-http
+
+          # 7. Create validation draft for review
+          - name: validate-reply-message-function
+            path: poc_gcp_functions/validate-reply-message-function
+            entry_point: http_handler
+            trigger: --trigger-http   
+
+          - name: remove-user-function
+            path: poc_gcp_functions/remove_user_function
+            entry_point: http_handler
+            trigger: --trigger-http   
+
+          - name: management-api-function
+            path: poc_gcp_functions/management_api_function
+            entry_point: http_handler
+            trigger: --trigger-http 
+
+          - name: store-execution-log-function
+            path: poc_gcp_functions/store_execution_log_function
+            entry_point: pubsub_event
+            trigger: --trigger-topic=${LOGGING_TOPIC}
+            
+          # User feedback handling function
+          - name: user-feedback-function
+            path: poc_gcp_functions/user_feedback_function
+            entry_point: feedback
+            trigger: --trigger-http
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.HCL_GCP_CREDENTIALS }}
+
+      - name: Set Env Variable in Upper Case
+        id: upper
+        run: echo "ENV=${ENVIRONMENT^^}" >> $GITHUB_ENV
+        shell: bash
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Deploy ${ENVIRONMENT}-${{ matrix.name }}
+        run: |
+          cd ${{ matrix.path }}
+          cp -r ../common . || true
+          
+          # Only create templates directory if needed for specific functions
+          if [[ "${{ matrix.name }}" == "email-permission-request-function" || "${{ matrix.name }}" == "user-feedback-function" ]]; then
+            echo "Function requires templates directory, ensuring it exists"
+            mkdir -p templates
+          fi
+
+          EXTRA_FLAGS=""
+          if [[ "${{ matrix.trigger }}" == "--trigger-http" ]]; then
+            EXTRA_FLAGS="--allow-unauthenticated"
+          fi
+
+          # Debug information
+          echo "=== DEPLOYMENT DEBUG INFO ==="
+          echo "Job name: deploy-functions"
+          echo "GitHub Run ID: ${{ github.run_id }}"
+          echo "GitHub Run Number: ${{ github.run_number }}"
+          echo "Matrix strategy job for: ${{ matrix.name }}"
+          echo "Function name: ${{ matrix.name }}"
+          echo "Function path: ${{ matrix.path }}"
+          echo "Entry point: ${{ matrix.entry_point }}"
+          echo "Trigger: ${{ matrix.trigger }}"
+          echo "Environment: ${ENVIRONMENT}"
+          echo "Current directory: $(pwd)"
+          echo "Directory contents:"
+          ls -la
+          echo "Templates directory exists: $(test -d templates && echo 'YES' || echo 'NO')"
+          if [ -d templates ]; then
+            echo "Templates contents:"
+            ls -la templates/
+          fi
+          echo "Requirements.txt contents:"
+          cat requirements.txt
+          echo "Common directory contents:"
+          if [ -d common ]; then
+            ls -la common/
+          else
+            echo "Common directory not found"
+          fi
+          echo "=== END DEBUG INFO ==="
+          
+          # Check if function already exists
+          echo "Checking if function ${ENVIRONMENT}-${{ matrix.name }} already exists..."
+          if gcloud functions describe ${ENVIRONMENT}-${{ matrix.name }} --region=${REGION} --project=${{ env.GCP_PROJECT_ID }} >/dev/null 2>&1; then
+            echo "Function ${ENVIRONMENT}-${{ matrix.name }} already exists"
+          else
+            echo "Function ${ENVIRONMENT}-${{ matrix.name }} does not exist"
+          fi
+          
+          gcloud functions deploy ${ENVIRONMENT}-${{ matrix.name }} \
+            --gen2 \
+            --runtime=python311 \
+            ${{ matrix.trigger }} \
+            --entry-point=${{ matrix.entry_point }} \
+            --region=${REGION} \
+            --source=. \
+            --memory=1GiB \
+            --timeout=300s \
+            --project=${{ env.GCP_PROJECT_ID }} \
+            --service-account=hcl-email-automation@${{ env.GCP_PROJECT_ID }}.iam.gserviceaccount.com \
+            --set-env-vars=GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }},PUBSUB_LOGGING_TOPIC=${LOGGING_TOPIC},ENVIRONMENT=${ENV} \
+            $EXTRA_FLAGS
+          cd - 
