@@ -1,115 +1,73 @@
-# 🎭 Playwright MCP Prompts
+# JSONPlaceholder API Automation Exercise
 
-This repository provides a structured setup of **Model Control Prompts (MCP)** to guide the team in **writing, maintaining, and standardizing Playwright tests**.
+## Overview
 
-The goal is to ensure **consistency, quality, and efficiency** across all testing workflows by adapting the model’s behavior to different contexts.
+This project contains automated API tests built using **Playwright (JavaScript)**.
+
+The purpose of this exercise is to validate core API operations against the public JSONPlaceholder API while following clean architecture, maintainability, and senior-level automation best practices.
+
+The automated tests cover:
+
+- Retrieve a random user and validate email
+- Fetch posts for a random user and validate ID range (1–100)
+- Update the title of a random post
+- Create a new post for a given user
+- Include an authorization token in every request
 
 ---
 
-## 📂 Project Structure
+## Tech Stack
+
+- Node.js (18+ recommended)
+- Playwright Test Runner
+- JavaScript (ES6+)
+- APIRequestContext (Playwright built-in API testing)
+
+---
+
+## Project Structure
 
 .
-├── prompts/
-├── instructions/
-└── chatmodes/
+├── src/
+│ ├── api/
+│ │ ├── jsonPlaceholderClient.js
+│ │ └── validators.js
+│ ├── fixtures/
+│ │ └── apiFixtures.js
+│ └── utils/
+│ └── random.js
+├── tests/
+│ └── api/
+│ └── jsonplaceholder.spec.js
+├── playwright.config.js
+├── package.json
+└── README.md
 
-### 📁 prompts/
+### Structure Explanation
 
-Base prompts used to **initialize conversations** with the model and establish project context.
+- **api/** → Reusable API client and validation helpers
+- **fixtures/** → Centralized Playwright fixtures
+- **utils/** → Shared utilities (e.g., random selector)
+- **tests/** → Test specifications
+- **playwright.config.js** → Global test configuration
 
-### 📁 instructions/
-
-Global rules and best practices that **always apply** when writing Playwright tests.
-
-### 📁 chatmodes/
-
-Conversation modes that adjust the **tone, depth, and focus** of the model’s responses based on the task.
-
----
-
-## 📑 Instructions (Global Rules)
-
-The `instructions/` folder defines **mandatory standards** for all Playwright tests, regardless of the active chat mode.
-
-It includes guidelines for:
-
-- **Code quality**
-
-  - Timeout handling
-  - Clarity and readability
-  - Reusability and consistency
-
-- **Test structure**
-
-  - Imports
-  - Code organization
-  - Hooks (`beforeEach`, `afterEach`, etc.)
-  - Test titles and descriptions
-
-- **File organization**
-
-  - Location
-  - Naming conventions
-  - Separation of concerns
-
-- **Best practices**
-  - Robust selectors
-  - Proper assertions
-  - Parallel execution
-  - Cross-browser testing
-
-> These rules **always apply**, no matter which chat mode is selected.
+This structure promotes scalability and maintainability.
 
 ---
 
-## 💬 Chat Modes
+## Installation
 
-The `chatmodes/` folder defines different conversation modes that adapt how the model responds:
+Clone the repository and install dependencies:
 
-- **QA Mode**  
-  Strict, technical, and API-focused guidance.
+```bash
+npm install
+npx playwright install
+```
 
-- **DevOps Mode**  
-  CI/CD and pipeline integration–focused answers.
+## Run Tests
 
-- **Educational Mode**  
-  Step-by-step, beginner-friendly explanations.
+npx playwright test
 
-- **Reporting Mode**  
-  Test summaries and result insights.
+## View HTML report:
 
-- **Exploratory Mode**  
-  Creative brainstorming for test scenarios.
-
-### 🧭 When to use each mode
-
-| Use case              | Recommended mode |
-| --------------------- | ---------------- |
-| Writing new tests     | QA Mode          |
-| Pipeline integration  | DevOps Mode      |
-| Training / onboarding | Educational Mode |
-| Sharing results       | Reporting Mode   |
-| Expanding coverage    | Exploratory Mode |
-
----
-
-## 🚀 Usage
-
-1. Load the **initial prompt** to establish context.
-2. **Instructions are applied automatically** to enforce Playwright standards.
-3. Switch **chat modes** based on your task.
-
-### Examples
-
-- Use **Educational Mode** when training a new QA engineer
-- Switch to **QA Mode** when reviewing a flaky test
-- Use **Reporting Mode** when preparing a test summary
-
----
-
-## ✅ Benefits
-
-- Ensures consistency across all Playwright tests
-- Adapts tone and depth per use case
-- Speeds up onboarding
-- Supports both daily testing and long-term quality goals
+npx playwright show-report
